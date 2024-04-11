@@ -8,7 +8,7 @@
 #include "getopt.h"
 
 #define	MAX_CONTEXT_URL_LEN 80
-size_t buffer_size = -1;			// computed from sample_rate if not specified
+size_t buffer_size = 0;				// computed from sample_rate if not specified
 long long sample_rate = -1;			// command line must specify this
 long long center_frequency = -1;	// command line must specify this
 long deviation = 10000;				// like regular amateur FM modulation
@@ -56,7 +56,7 @@ static struct iio_buffer  *txbuf = NULL;
 static bool stop;
 
 /* cleanup and exit */
-static void shutdown()
+static void shutdown(void)
 {	
 	if (status_display) printf("* Destroying buffers\n");
 //	if (rxbuf) { iio_buffer_destroy(rxbuf); }
@@ -81,7 +81,7 @@ static void handle_sig(int sig)
 
 /* check return value of iio_attr_write function (for whole device) */
 static void errchk_dev(int v) {
-	if (v < 0) { fprintf(stderr, "Error %d writing to IIO device\n"); shutdown(); }
+	if (v < 0) { fprintf(stderr, "Error %d writing to IIO device\n", v); shutdown(); }
 }
 
 /* check return value of iio_channel_attr_write function */
@@ -197,7 +197,7 @@ static bool set_pluto_8x_interpolator(bool enable)
 	}
 
 	// validate that they're in approximate 8x ratio
-	if (abs(8 * sf2 - sf1) > 20) {
+	if (llabs(8 * sf2 - sf1) > 20) {
 		fprintf(stderr, "sampling_frequency_available values not in ~8x ratio\n");
 		return false;
 	}
@@ -284,13 +284,13 @@ static bool cfg_ad9361_txlo_powerdown(long long val)
 }
 
 /* adjusts single-ended crystal oscillator compensation for Pluto SDR */
-static bool cfg_ad9361_xo_correction(int delta)
+static void cfg_ad9361_xo_correction(int delta)
 {
 	errchk_dev(iio_device_attr_write_longlong(get_ad9361_phy(), "xo_correction", 40000000 + delta));
 }
 
 /* turns off automatic transmit calibration for Pluto SDR */
-static bool cfg_ad9361_manual_tx_quad(void)
+static void cfg_ad9361_manual_tx_quad(void)
 {
 	errchk_dev(iio_device_attr_write(get_ad9361_phy(), "calib_mode", "manual_tx_quad"));
 }
@@ -374,7 +374,7 @@ int main (int argc, char **argv)
 				break;
 			
 			case 'b':
-				buffer_size = (long long)atof(optarg);
+				buffer_size = (unsigned long)atof(optarg);
 				break;
 
 			case 'x':
@@ -436,13 +436,13 @@ int main (int argc, char **argv)
 		exit(1);
 	} else {
 		txcfg.tx_gain = -transmit_attenuation;
-		if (status_display) printf("* Transmit attenuation = %lld dB\n", transmit_attenuation);
+		if (status_display) printf("* Transmit attenuation = %d dB\n", transmit_attenuation);
 	}
 
-	if (buffer_size == -1) {
+	if (buffer_size == 0) {
 		buffer_size = (size_t)(0.040 * sample_rate);	// 40ms buffer if not specified
 	}
-	if (status_display) printf("* Buffer size = %ld bytes\n", buffer_size);
+	if (status_display) printf("* Buffer size = %lu bytes\n", buffer_size);
 
 	// TX stream config constant values
 	txcfg.bw_hz = 200000;	// 200 kHz RF bandwidth, Pluto's minimum
@@ -472,7 +472,7 @@ int main (int argc, char **argv)
 	iio_channel_enable(tx0_i);
 	iio_channel_enable(tx0_q);
 	
-	if (status_display) printf("* Creating a non-cyclic IIO buffer of %d samples\n", buffer_size);
+	if (status_display) printf("* Creating a non-cyclic IIO buffer of %lu samples\n", buffer_size);
 
 	txbuf = iio_device_create_buffer(tx, buffer_size, false);
 	if (!txbuf) {
@@ -502,7 +502,7 @@ int main (int argc, char **argv)
 	if (status_display) printf("* Starting tx streaming (press CTRL+C to cancel)\n");
 	while (!stop)
 	{
-		ssize_t nbytes_rx, nbytes_tx;
+		ssize_t nbytes_tx;
 
 		// Schedule TX buffer
 		nbytes_tx = iio_buffer_push(txbuf);
