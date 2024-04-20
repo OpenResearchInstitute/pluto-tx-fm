@@ -5,17 +5,23 @@
 #include <stdio.h>
 #include <iio.h>
 #include <unistd.h>
+#include <math.h>
 #include "getopt.h"
 
 #define	MAX_CONTEXT_URL_LEN 80
+#define MAX_SAMPLE_VALUE	0x7FFF
+
 size_t buffer_size = 0;				// computed from sample_rate if not specified
 long long sample_rate = -1;			// command line must specify this
 long long center_frequency = -1;	// command line must specify this
-long deviation = 10000;				// like regular amateur FM modulation
+long max_deviation = 10000;				// like regular amateur FM modulation
 int transmit_attenuation = 10;		// minimum "safe" attenuation (for Pluto loopback)
 int xo_correction = -465;			// crystal oscillator correction for my Pluto
 char iio_context_url[MAX_CONTEXT_URL_LEN+1] = "ip:pluto.local";	// default value often works
 bool status_display = 1;			// default to chatty status display (change with -q)
+
+double time_per_sample;				// reciprocal of sample_rate
+double deviation_scale_factor;		// multiply this by incoming sample to get deviation in Hz
 
 /* Signal generator */
 extern void next_tx_sample(int16_t * const i_sample, int16_t * const q_sample);
@@ -296,6 +302,34 @@ static void cfg_ad9361_manual_tx_quad(void)
 }
 
 
+/* Obtain a sample from stdin */
+int16_t get_next_sample(void)
+{
+	int16_t value;
+
+	if (read(STDIN_FILENO, (void *)&value, 2) != 2) {	// detect EOF or error (dumbly)
+		stop = true;
+		return 0;
+	}
+
+	return value;
+}
+
+
+/* Convert a sample of FM deviation into an I/Q sample in an FM signal */
+void modulate_sample(int16_t deviation, int16_t * const i_sample, int16_t * const q_sample)
+{
+    static double signal = 0.0;	//start the signal at 0, keep its instantaneous value here.
+
+	double deviation_in_hertz = deviation * deviation_scale_factor;
+	double phase_increment_this_sample = 2 * M_PI * deviation_in_hertz * time_per_sample;
+
+    signal = fmod(signal + phase_increment_this_sample, 2 * M_PI);
+    *i_sample = (int16_t)(cos(signal) * MAX_SAMPLE_VALUE);  // scale to 16-bit integer (12 MSbits used)
+    *q_sample = (int16_t)(sin(signal) * MAX_SAMPLE_VALUE);
+}
+
+
 void usage(void)
 {
 	fprintf(stderr,
@@ -303,27 +337,34 @@ void usage(void)
 		"Usage:\tpluto_tx_fm -f freq  -s samplerate [-options]\n\n"
 		"\t-f center_frequency\n"
 		"\t\tCenter frequency in Hz (no default)\n\n"
+
 		"\t-s samplerate\n"
 		"\t\tSample rate in Hz. Used on both the input stream and the transmitted output.\n\n"
+
 		"\t-u iio_context_url\n"
 		"\t\tURL of the Pluto device, in libiio format.\n"
 		"\t\tDefault: ip:pluto.local\n\n"
+
 		"\t-d deviation\n"
 		"\t\tDesired FM deviation corresponding to the maximum positive sample value 0x7FFF.\n"
 		"\t\tThis is internally translated to a sensitivity factor.\n"
 		"\t\tSmaller sample values result in proportionally smaller deviations;\n"
 		"\t\tnegative sample values result in negative deviations.\n"
 		"\t\tDefault deviation 10000.\n\n"
+
 		"\t-a transmit_attenuation\n"
 		"\t\tspecifies in dB the amount by which the output power of the Pluto\n"
 		"\t\tshould be reduced from full scale. Default is 10, the minimum attentuation\n"
 		"\t\tthat is safe to loop back into the Pluto's receiver.\n\n"
+
 		"\t-b buffer_size\n"
 		"\t\tspecifies the size in samples of the IIO kernel buffers.\n"
 		"\t\tDefault size is 0.040 * samplerate, for 40ms buffering.\n\n"
+
 		"\t-x xo_correction\n"
 		"\t\tspecifies the crystal oscillator frequency correction in Hz.\n"
 		"\t\tDefault is 0.\n\n"
+
 		"\t-q\n"
 		"\t\tQuiet status output\n\n"
 		);
@@ -366,7 +407,7 @@ int main (int argc, char **argv)
 				break;
 			
 			case 'd':
-				deviation = (long) atof(optarg);
+				max_deviation = (long) atof(optarg);
 				break;
 			
 			case 'a':
@@ -417,6 +458,7 @@ int main (int argc, char **argv)
 		exit(1);
 	} else {
 		txcfg.fs_hz = sample_rate;	// baseband sample rate
+		time_per_sample = 1.0 / sample_rate;
 		if (status_display) printf("* Sample rate = %lld\n", sample_rate);
 	}
 
@@ -426,9 +468,11 @@ int main (int argc, char **argv)
 		exit(1);
 	}
 
-	if (deviation < 100 || deviation > 100000) {
-		fprintf(stderr, "deviation %ld is unreasonable.\n", deviation);
+	if (max_deviation < 100 || max_deviation > 100000) {
+		fprintf(stderr, "deviation %ld is unreasonable.\n", max_deviation);
 		exit(1);
+	} else {
+		deviation_scale_factor = (double)max_deviation / MAX_SAMPLE_VALUE;
 	}
 
 	if (transmit_attenuation < 0 || transmit_attenuation > 89) {
@@ -487,7 +531,62 @@ int main (int argc, char **argv)
 
 
 
-	//!!! redo the streaming logic
+	/*	!!! TODO: redo the streaming logic for real-world use case, including
+		intermittent transmitting with PTT, imperfect sample rates, etc.
+
+		The goal is to accept one or more bursts of realtime data at approximately
+		the nominal sample rate, while doing something reasonable when these
+		expectations are not met.
+
+		We cannot assume that our source and sink are in lock step. If both have
+		realtime pacing, they may have any alignment and that alignment may drift.
+		The source may not be paced at all, and it might be too slow or more than
+		fast enough. If the source is too slow, there isn't much we can do except
+		to diagnose the underrun condition, but we don't want to do this accidentally
+		in case of a predictable transient event. If the source is too fast, but
+		smart about buffering (as, presumably, a shell pipeline would be) there's
+		no problem.
+
+		We have a couple of common use cases.
+			1. Transmit from a file using a shell pipeline. In this case, the source
+			is presumably fast, and we always have plenty of input until EOF. When the
+			file ends, we can just exit.
+
+			2. Transmit from a realtime PTT source. In this case, the source is
+			intermittent. We need to be transmitting only when we have source data,
+			so we start out silent, enable the transmitter when we're ready, and
+			cleanly finish the transmission and shut off the transmitter when the
+			data runs dry. After which, we go back to silent mode until a new
+			transmission arrives. If there's underrun during a transmission, that's
+			bad. We don't have access to higher protocol layers to fix this. 
+
+
+		At startup, we are waiting for a buffer of samples to arrive. state = WAIT.
+		In WAIT, we are blocked on stdin.
+
+		If a sample arrives on stdin while in WAIT, we add it to the empty input buffer,
+		transition to the PARTIAL state, and set (or reset) the partial input timeout.
+
+		If EOF occurs on stdin in the WAIT state, we should just exit.
+		This is the normal termination for a file transmission, for instance. I think.
+
+		If some other error occurs on stdin in the WAIT state, we have a broken pipeline
+		and should try to print a diagnostic error message to stderr before exiting.
+
+		If ^C happens in the WAIT state, we should 
+
+		The only other things that can happen in WAIT are ^C or EOF on stdin. 
+
+		If the timeout expires, we fill the rest of the buffer with 0 and push it,
+		transitioning to FINISH state.
+
+		If a sample arrives in ...
+	
+
+		For now, we have just hacked up the old logic:	
+	*/
+
+
 
 	// Write first TX buf with all zeroes, for cleaner startup 
 	p_inc = iio_buffer_step(txbuf);
@@ -497,12 +596,13 @@ int main (int argc, char **argv)
 			((int16_t*)p_dat)[1] = 0 << 4; // Imag (Q)
 		}
 
-//	cfg_ad9361_txlo_powerdown(0);
+	cfg_ad9361_txlo_powerdown(0);
 
 	if (status_display) printf("* Starting tx streaming (press CTRL+C to cancel)\n");
 	while (!stop)
 	{
 		ssize_t nbytes_tx;
+		int16_t sample;
 
 		// Schedule TX buffer
 		nbytes_tx = iio_buffer_push(txbuf);
@@ -512,7 +612,8 @@ int main (int argc, char **argv)
 		p_inc = iio_buffer_step(txbuf);
 		p_end = iio_buffer_end(txbuf);
 		for (p_dat = (char *)iio_buffer_first(txbuf, tx0_i); p_dat < p_end; p_dat += p_inc) {
-			next_tx_sample((int16_t*)p_dat, (int16_t*)(p_dat+2));
+			sample = get_next_sample();
+			modulate_sample(sample, (int16_t*)p_dat, (int16_t*)(p_dat+2));
 		}
 
 		// Sample counter increment and status output

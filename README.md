@@ -26,6 +26,20 @@ Before the input stream has sent the first TBD samples, the transmitter is off. 
 
 Portions of this program are based on the standard IIO demo code from Analog Devices.
 
+## Basic Build and Test
+
+Build the program using `buildtest.sh` and the test signal source using `ssbuild.sh` and feed the test signal source into the program. Like this:
+
+```
+./buildtest.sh
+./ssbuild.sh
+./sweep-sine | ./pluto-tx-fm -f 436500000 -s 273000
+```
+and observe the Pluto's transmit output on a spectrum analyzer tuned to 436.5 MH with a span of about 50 kHz. You can try various command line arguments to pluto-tx-fm, but note that sweep-sine is hard-coded to a fixed sample rate of 273000 Hz.
+
+![Basic test results](basic-test.jpg)
+
+In the oscilloscope image above you can see the main signal (brightest line and highest peak), a symmetrical image of the signal (about 40 dB lower), and the local oscillator leakage (near zero frequency offset).
 ## Troubleshooting
 
 If you get this:
