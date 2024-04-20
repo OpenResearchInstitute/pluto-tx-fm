@@ -35,7 +35,7 @@ Build the program using `buildtest.sh` and the test signal source using `ssbuild
 ./ssbuild.sh
 ./sweep-sine | ./pluto-tx-fm -f 436500000 -s 273000
 ```
-and observe the Pluto's transmit output on a spectrum analyzer tuned to 436.5 MH with a span of about 50 kHz. You can try various command line arguments to pluto-tx-fm, but note that sweep-sine is hard-coded to a fixed sample rate of 273000 Hz.
+and observe the Pluto's transmit output on a spectrum analyzer tuned to 436.5 MHz with a span of about 50 kHz. You can try various command line arguments to pluto-tx-fm, but note that sweep-sine is hard-coded to a fixed sample rate of 273000 Hz.
 
 ![Basic test results](basic-test.jpg)
 
