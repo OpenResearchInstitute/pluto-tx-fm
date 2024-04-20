@@ -39,7 +39,7 @@ and observe the Pluto's transmit output on a spectrum analyzer tuned to 436.5 MH
 
 ![Basic test results](basic-test.jpg)
 
-In the oscilloscope image above you can see the main signal (brightest line and highest peak), a symmetrical image of the signal (about 40 dB lower), and the local oscillator leakage (near zero frequency offset).
+In the spectrum analyzer image above you can see the main signal (brightest line and highest peak), a symmetrical image of the signal (about 40 dB lower), and the local oscillator leakage (near zero frequency offset).
 ## Troubleshooting
 
 If you get this:
