@@ -20,6 +20,8 @@ Command line flags:
 
 * `-x <xtal oscillator correction>` specifies the crystal oscillator correction in Hz. Default 0.
 
+* `-E` enables offset tuning. The local oscillator is set to `freq` - 1.5 * `deviation` and the signal is offset from there to remain centered on `freq`.
+
 * `-q` quiets the status messages printed to stdout
 
 Before the input stream has sent the first TBD samples, the transmitter is off. The transmitter is automatically enabled when samples are buffered. When the input stream underruns by TBD samples, the transmitter shuts off.

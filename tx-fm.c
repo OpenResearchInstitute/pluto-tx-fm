@@ -19,6 +19,8 @@ int transmit_attenuation = 10;		// minimum "safe" attenuation (for Pluto loopbac
 int xo_correction = -465;			// crystal oscillator correction for my Pluto
 char iio_context_url[MAX_CONTEXT_URL_LEN+1] = "ip:pluto.local";	// default value often works
 bool status_display = 1;			// default to chatty status display (change with -q)
+bool offset_lo = 0;					// default to signal centered on the LO frequency
+long long offset_lo_offset = 0;		// frequency offset used with -E flag
 
 double time_per_sample;				// reciprocal of sample_rate
 double deviation_scale_factor;		// multiply this by incoming sample to get deviation in Hz
@@ -321,7 +323,7 @@ void modulate_sample(int16_t deviation, int16_t * const i_sample, int16_t * cons
 {
     static double signal = 0.0;	//start the signal at 0, keep its instantaneous value here.
 
-	double deviation_in_hertz = deviation * deviation_scale_factor;
+	double deviation_in_hertz = deviation * deviation_scale_factor + offset_lo_offset;
 	double phase_increment_this_sample = 2 * M_PI * deviation_in_hertz * time_per_sample;
 
     signal = fmod(signal + phase_increment_this_sample, 2 * M_PI);
@@ -365,6 +367,9 @@ void usage(void)
 		"\t\tspecifies the crystal oscillator frequency correction in Hz.\n"
 		"\t\tDefault is 0.\n\n"
 
+		"\t-E\n"
+		"\t\tEnable offset tuning, moving the Pluto's local oscillator frequency -1.5*deviation\n\n"
+		
 		"\t-q\n"
 		"\t\tQuiet status output\n\n"
 		);
@@ -392,7 +397,7 @@ int main (int argc, char **argv)
 	signal(SIGINT, handle_sig);
 
 	int opt;
-	while ((opt = getopt(argc, argv, "f:s:u:d:a:b:x:hq")) != -1) {
+	while ((opt = getopt(argc, argv, "f:s:u:d:a:b:x:hqE")) != -1) {
 		switch (opt) {
 			case 'f':
 				center_frequency = (long long)atof(optarg);
@@ -424,6 +429,10 @@ int main (int argc, char **argv)
 
 			case 'q':
 				status_display = 0;
+				break;
+
+			case 'E':
+				offset_lo = 1;
 				break;
 			
 			case 'h':
@@ -487,6 +496,12 @@ int main (int argc, char **argv)
 		buffer_size = (size_t)(0.040 * sample_rate);	// 40ms buffer if not specified
 	}
 	if (status_display) printf("* Buffer size = %lu bytes\n", buffer_size);
+
+	if (offset_lo) {
+		offset_lo_offset = 1.5 * max_deviation;
+		txcfg.lo_hz = center_frequency - offset_lo_offset;	// LO offset from RF center frequency
+		if (status_display) printf("* Offset LO frequency = %lld\n", txcfg.lo_hz);
+	}
 
 	// TX stream config constant values
 	txcfg.bw_hz = 200000;	// 200 kHz RF bandwidth, Pluto's minimum
